@@ -1,21 +1,25 @@
-const { default: makeWASocket, useMultiFileAuthState, delay } = require('@adiwajshing/baileys');
-const chalk = require('chalk');
+// Import necessary modules
+const { default: makeWASocket, useMultiFileAuthState } = require('@adiwajshing/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
+
+// Simple coloring function since chalk is causing issues
+const colors = {
+    red: (text) => `\x1b[31m${text}\x1b[0m`,
+    green: (text) => `\x1b[32m${text}\x1b[0m`,
+    yellow: (text) => `\x1b[33m${text}\x1b[0m`,
+    blue: (text) => `\x1b[34m${text}\x1b[0m`,
+    gray: (text) => `\x1b[90m${text}\x1b[0m`
+};
 
 // Status update tracking
 const statusUpdates = new Map();
 
-// CLI formatting helpers
-const formatMessage = (msg) => {
-    const timestamp = new Date().toLocaleTimeString();
-    return `[${timestamp}] ${msg}`;
-};
-
-const printMessage = (from, message, isStatus = false) => {
-    const prefix = isStatus ? chalk.yellow('[STATUS]') : chalk.green('[MESSAGE]');
-    console.log(`${prefix} ${chalk.blue(from)}: ${message}`);
-};
+// Print formatted messages
+function printMessage(from, message, isStatus = false) {
+    const prefix = isStatus ? colors.yellow('[STATUS]') : colors.green('[MESSAGE]');
+    console.log(`${prefix} ${colors.blue(from)}: ${message}`);
+}
 
 async function startMonitor() {
     try {
@@ -31,18 +35,18 @@ async function startMonitor() {
             getMessage: async () => null
         });
 
-        // QR code generation
+        // QR code and connection handling
         sock.ev.on('connection.update', (update) => {
             const { connection, qr } = update;
             if (qr) {
                 qrcode.generate(qr, { small: true });
             }
             if (connection === 'open') {
-                console.log(chalk.green('Connected to WhatsApp!'));
+                console.log(colors.green('Connected to WhatsApp!'));
             }
             if (connection === 'close') {
-                console.log(chalk.red('Connection closed, attempting to reconnect...'));
-                startMonitor().catch(console.error);
+                console.log(colors.red('Connection closed, attempting to reconnect...'));
+                setTimeout(() => startMonitor().catch(console.error), 5000);
             }
         });
 
@@ -89,18 +93,9 @@ async function startMonitor() {
             Object.entries(presences).forEach(([jid, presence]) => {
                 const action = presence.lastKnownPresence || 'unknown';
                 if (action === 'composing') {
-                    console.log(chalk.gray(`${jid.split('@')[0]} is typing...`));
+                    console.log(colors.gray(`${jid.split('@')[0]} is typing...`));
                 }
             });
-        });
-
-        // Error handling
-        sock.ev.on('connection.update', ({ lastDisconnect }) => {
-            const error = lastDisconnect?.error;
-            if (error?.output?.statusCode === 401) {
-                console.log(chalk.red('Authentication failed. Please delete auth_info folder and rescan QR code.'));
-                process.exit(1);
-            }
         });
 
         // Keep connection alive
@@ -109,7 +104,7 @@ async function startMonitor() {
         }, 60 * 1000);
 
     } catch (err) {
-        console.error(chalk.red('Error starting monitor:'), err);
+        console.error(colors.red('Error starting monitor:'), err);
         process.exit(1);
     }
 }
