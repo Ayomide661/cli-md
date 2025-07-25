@@ -1,5 +1,5 @@
-const { makeWASocket, useMultiFileAuthState, delay } = require('@adiwajshing/baileys');
-const chalk = require('chalk').default;
+const { default: makeWASocket, useMultiFileAuthState, delay } = require('@adiwajshing/baileys');
+const chalk = require('chalk');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 
