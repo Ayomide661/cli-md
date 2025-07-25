@@ -1,107 +1,119 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const prompt = require('prompt');
+const { Boom } = require('@hapi/boom');
+const makeWASocket = require('@adiwajshing/baileys').default;
+const { useMultiFileAuthState } = require('@adiwajshing/baileys');
+const { delay } = require('@adiwajshing/baileys');
 const chalk = require('chalk');
-const ora = require('ora').default;
+const qrcode = require('qrcode-terminal');
 
-// Initialize the client
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './sessions' }),
-    puppeteer: { 
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    }
-});
+// Status update tracking
+const statusUpdates = new Map();
 
-// Loading spinner
-const spinner = ora('Initializing WhatsApp client...').start();
+// CLI formatting helpers
+const formatMessage = (msg) => {
+    const timestamp = new Date().toLocaleTimeString();
+    return `[${timestamp}] ${msg}`;
+};
 
-// Clear screen and display header
-function clearScreen() {
-    console.clear();
-    console.log(chalk.green.bold('WhatsApp CLI Bot'));
-    console.log(chalk.gray('Press Ctrl+C to exit\n'));
-}
+const printMessage = (from, message, isStatus = false) => {
+    const prefix = isStatus ? chalk.yellow('[STATUS]') : chalk.green('[MESSAGE]');
+    console.log(`${prefix} ${chalk.blue(from)}: ${message}`);
+};
 
-// Format JID for display
-function formatJid(jid) {
-    return jid.split('@')[0];
-}
+async function startMonitor() {
+    // Initialize auth state
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-// When the client is ready
-client.on('ready', () => {
-    spinner.succeed('Client is ready!');
-    clearScreen();
-    startMessageLoop();
-});
-
-// Generate QR code for authentication
-client.on('qr', qr => {
-    spinner.stop();
-    clearScreen();
-    console.log(chalk.yellow('Scan the QR code below:'));
-    qrcode.generate(qr, { small: true });
-});
-
-// Handle incoming messages
-client.on('message', async message => {
-    // Get contact name
-    const contact = await message.getContact();
-    const name = contact.pushname || contact.number || 'Unknown';
-    
-    // Display incoming message
-    console.log(
-        `${chalk.blue.bold(formatJid(message.from))} ${chalk.gray(`(${name})`)}\n` +
-        `${chalk.green('>')} ${message.body}`
-    );
-});
-
-// Start the client
-client.initialize();
-
-// Function to handle sending messages
-async function startMessageLoop() {
-    // Configure prompt
-    prompt.start();
-    prompt.message = '';
-    prompt.delimiter = '';
-
-    while (true) {
-        try {
-            // Get user input
-            const { input } = await prompt.get([{
-                name: 'input',
-                description: chalk.gray('\nEnter message (format: "jid message"):'),
-                type: 'string',
-                required: true
-            }]);
-
-            // Parse input
-            const spaceIndex = input.indexOf(' ');
-            if (spaceIndex === -1) {
-                console.log(chalk.red('Invalid format. Use: "jid message"'));
-                continue;
-            }
-
-            const jid = input.substring(0, spaceIndex).trim();
-            const messageContent = input.substring(spaceIndex + 1).trim();
-
-            try {
-                // Send message
-                await client.sendMessage(jid, messageContent);
-                console.log(chalk.green(`Message sent to ${formatJid(jid)}`));
-            } catch (error) {
-                console.log(chalk.red(`Error sending message: ${error.message}`));
-            }
-        } catch (error) {
-            console.log(chalk.red(`Error: ${error.message}`));
+    // Create WhatsApp socket
+    const sock = makeWASocket({
+        printQRInTerminal: true,
+        auth: state,
+        logger: pino({ level: 'silent' }), // Disable verbose logging
+        browser: ['WhatsApp Monitor Bot', 'Chrome', '1.0'],
+        getMessage: async (key) => {
+            return null;
         }
-    }
+    });
+
+    // QR code generation
+    sock.ev.on('connection.update', (update) => {
+        const { connection, qr } = update;
+        if (qr) {
+            qrcode.generate(qr, { small: true });
+        }
+        if (connection === 'open') {
+            console.log(chalk.green('Connected to WhatsApp!'));
+        }
+        if (connection === 'close') {
+            console.log(chalk.red('Connection closed, attempting to reconnect...'));
+            startMonitor().catch(console.error);
+        }
+    });
+
+    // Save credentials when updated
+    sock.ev.on('creds.update', saveCreds);
+
+    // Message handler
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+
+        for (const msg of messages) {
+            if (!msg.message) continue;
+
+            const sender = msg.key.remoteJid;
+            const messageText = msg.message.conversation || 
+                              msg.message.extendedTextMessage?.text || 
+                              '[Media message]';
+            
+            const contact = await sock.onWhatsApp(sender);
+            const name = contact[0]?.verifiedName || contact[0]?.pushname || sender.split('@')[0];
+            
+            printMessage(name, messageText);
+        }
+    });
+
+    // Status update handler
+    sock.ev.on('status.update', async (updates) => {
+        for (const update of updates) {
+            const jid = update.jid;
+            const status = update.status || '[No text status]';
+            
+            const contact = await sock.onWhatsApp(jid);
+            const name = contact[0]?.verifiedName || contact[0]?.pushname || jid.split('@')[0];
+            
+            // Only show if status is new or changed
+            if (!statusUpdates.has(jid) || statusUpdates.get(jid) !== status) {
+                statusUpdates.set(jid, status);
+                printMessage(name, status, true);
+            }
+        }
+    });
+
+    // Presence updates (online/typing)
+    sock.ev.on('presence.update', ({ id, presences }) => {
+        Object.entries(presences).forEach(([jid, presence]) => {
+            const action = presence.lastKnownPresence || 'unknown';
+            if (action === 'composing') {
+                console.log(chalk.gray(`${jid.split('@')[0]} is typing...`));
+            }
+        });
+    });
+
+    // Error handling
+    sock.ev.on('connection.update', ({ lastDisconnect }) => {
+        if (lastDisconnect?.error?.output?.statusCode === 401) {
+            console.log(chalk.red('Authentication failed. Please delete auth_info folder and rescan QR code.'));
+            process.exit(1);
+        }
+    });
+
+    // Keep the connection alive
+    setInterval(() => {
+        sock.sendPresenceUpdate('available').catch(() => {});
+    }, 60 * 1000);
 }
 
-// Handle Ctrl+C gracefully
-process.on('SIGINT', () => {
-    console.log(chalk.yellow('\nShutting down gracefully...'));
-    client.destroy();
-    process.exit();
+// Start the monitor
+startMonitor().catch(err => {
+    console.error(chalk.red('Error starting monitor:'), err);
+    process.exit(1);
 });
