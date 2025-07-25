@@ -105,4 +105,28 @@ async function startMessageLoop() {
                 try {
                     const media = await MessageMedia.fromFilePath(filePath);
                     await client.sendMessage(jid, media);
-                    console.log(chalk.green(`Media sent to $
+                    console.log(chalk.green(`Media sent to ${formatJid(jid)}`));
+                } catch (error) {
+                    console.log(chalk.red(`Error sending media: ${error.message}`));
+                }
+            } else {
+                // Send text message
+                try {
+                    await client.sendMessage(jid, content);
+                    console.log(chalk.green(`Message sent to ${formatJid(jid)}`));
+                } catch (error) {
+                    console.log(chalk.red(`Error sending message: ${error.message}`));
+                }
+            }
+        } catch (error) {
+            console.log(chalk.red(`Error: ${error.message}`));
+        }
+    }
+}
+
+// Handle Ctrl+C gracefully
+process.on('SIGINT', () => {
+    console.log(chalk.yellow('\nShutting down gracefully...'));
+    client.destroy();
+    process.exit();
+});
