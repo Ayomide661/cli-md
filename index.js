@@ -2,7 +2,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const prompt = require('prompt');
 const chalk = require('chalk');
-const ora = require('ora');
+const ora = require('ora').default;
 
 // Initialize the client
 const client = new Client({
@@ -10,8 +10,7 @@ const client = new Client({
     puppeteer: { 
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
-    },
-    webVersionCache: { type: 'remote', remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html' }
+    }
 });
 
 // Loading spinner
@@ -57,18 +56,6 @@ client.on('message', async message => {
     );
 });
 
-// Handle authentication failure
-client.on('auth_failure', () => {
-    spinner.fail('Authentication failed. Please try again.');
-});
-
-// Handle disconnected events
-client.on('disconnected', (reason) => {
-    spinner.fail(`Client disconnected: ${reason}`);
-    console.log(chalk.red('Restarting...'));
-    client.initialize();
-});
-
 // Start the client
 client.initialize();
 
@@ -84,7 +71,7 @@ async function startMessageLoop() {
             // Get user input
             const { input } = await prompt.get([{
                 name: 'input',
-                description: chalk.gray('\nEnter message (format: "jid message" or "jid -f filepath" for media):'),
+                description: chalk.gray('\nEnter message (format: "jid message"):'),
                 type: 'string',
                 required: true
             }]);
@@ -92,31 +79,19 @@ async function startMessageLoop() {
             // Parse input
             const spaceIndex = input.indexOf(' ');
             if (spaceIndex === -1) {
-                console.log(chalk.red('Invalid format. Use: "jid message" or "jid -f filepath"'));
+                console.log(chalk.red('Invalid format. Use: "jid message"'));
                 continue;
             }
 
             const jid = input.substring(0, spaceIndex).trim();
-            const content = input.substring(spaceIndex + 1).trim();
+            const messageContent = input.substring(spaceIndex + 1).trim();
 
-            // Check if sending media
-            if (content.startsWith('-f ')) {
-                const filePath = content.substring(3).trim();
-                try {
-                    const media = await MessageMedia.fromFilePath(filePath);
-                    await client.sendMessage(jid, media);
-                    console.log(chalk.green(`Media sent to ${formatJid(jid)}`));
-                } catch (error) {
-                    console.log(chalk.red(`Error sending media: ${error.message}`));
-                }
-            } else {
-                // Send text message
-                try {
-                    await client.sendMessage(jid, content);
-                    console.log(chalk.green(`Message sent to ${formatJid(jid)}`));
-                } catch (error) {
-                    console.log(chalk.red(`Error sending message: ${error.message}`));
-                }
+            try {
+                // Send message
+                await client.sendMessage(jid, messageContent);
+                console.log(chalk.green(`Message sent to ${formatJid(jid)}`));
+            } catch (error) {
+                console.log(chalk.red(`Error sending message: ${error.message}`));
             }
         } catch (error) {
             console.log(chalk.red(`Error: ${error.message}`));
